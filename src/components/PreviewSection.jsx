@@ -1,5 +1,5 @@
 import { Container, Typography, Box } from '@mui/material';
-import preview from '../assets/preview1.png'; // Dummy-Bild
+import preview from '../assets/preview1.jpg'; // Dummy-Bild
 
 export default function PreviewSection() {
   return (

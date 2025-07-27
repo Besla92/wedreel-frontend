@@ -1,16 +1,24 @@
+// src/theme.js
 import { createTheme } from '@mui/material/styles';
 
 const theme = createTheme({
   palette: {
+    background: {
+      default: '#fdfbf7',
+    },
     primary: {
-      main: '#f06292', // Hochzeitlich rosa
+      main: '#5a4328',
     },
     secondary: {
-      main: '#ffffff',
+      main: '#d3c1aa',
+    },
+    text: {
+      primary: '#5a4328',
+      secondary: '#a1886d',
     },
   },
   typography: {
-    fontFamily: 'Roboto, sans-serif',
+    fontFamily: ['"Playfair Display"', 'serif'].join(','),
   },
 });
 
