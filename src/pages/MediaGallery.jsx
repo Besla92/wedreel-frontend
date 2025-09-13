@@ -12,6 +12,7 @@ import {
     Tooltip,
     LinearProgress
 } from '@mui/material';
+import { useRef } from 'react';
 import CloseIcon from '@mui/icons-material/Close';
 import SettingsIcon from '@mui/icons-material/Settings';
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
@@ -39,37 +40,56 @@ export default function MediaGallery({ externalUpload }) {
     const [eventTitle, setEventTitle] = useState('');
     const [eventDate, setEventDate] = useState('');
     const [mediaItems, setMediaItems] = useState([]);
-    const API_URL = import.meta.env.VITE_API_URL;
     const { user } = useAuth();
     const isAdmin = user?.roles?.includes('ROLE_ADMIN');
     const location = useLocation();
     const [downloadProgress, setDownloadProgress] = useState(null);
     const [showMyFacesOnly, setShowMyFacesOnly] = useState(false);
+    const [eventId, setEventId] = useState(null);
 
     const fetchMedia = useCallback(async () => {
         try {
             const token = localStorage.getItem('token');
-            const response = await axiosInstance.get(`${API_URL}/api/my-event/media`, {
+            const response = await axiosInstance.get(`/api/my-event/media`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
-            const fetchedItems = (response.data ?? []).sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+            const fetchedItems = (response.data ?? []).sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
             setMediaItems((prev) => {
-                const knownIds = new Set(fetchedItems.map((item) => item.id));
-                const extras = prev.filter((item) => !knownIds.has(item.id));
-                return [...extras, ...fetchedItems].sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
-            });
-        } catch (error) {
-            console.error('Fehler beim Laden der Medien:', error);
-        }
-    }, [API_URL]);
+               const prevById = new Map(prev.map(i => [i.id, i]));
+               const merged = fetchedItems.map(it => {
+                    const old = prevById.get(it.id);
+                    if (!old) return it;
+
+                    return {
+                        ...it,
+                        url: old.url ?? it.url,
+                        thumbUrl: old.thumbUrl ?? it.thumbUrl,
+                    };
+               });
+
+               const fetchedIds = new Set(fetchedItems.map(i => i.id));
+               const extras = prev.filter(p => !fetchedIds.has(p.id));
+               const all = [...extras, ...merged];
+               all.sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
+                    return all;
+               });
+            } catch (error) {
+                console.error('Fehler beim Laden der Medien:', error);
+            }
+        }, []);
+
 
     const fetchEvent = useCallback(async () => {
         try {
             const token = localStorage.getItem('token');
-            const response = await axiosInstance.get(`${API_URL}/api/my-event`, {
+            const response = await axiosInstance.get(`/api/my-event`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
-            const { title, date, inviteToken } = response.data;
+
+            const { id, title, date, inviteToken } = response.data || {};
+            if (id) setEventId(id);
+
             setEventTitle(title || '');
             setEventDate(date ? new Date(date).toLocaleDateString('de-DE') : '');
             setInviteLink(`${window.location.origin}/join?token=${inviteToken}`);
@@ -77,14 +97,176 @@ export default function MediaGallery({ externalUpload }) {
             console.error('Fehler beim Laden des Events:', err);
             setError('Fehler beim Laden der Medien.');
         }
-    }, [API_URL]);
+    }, []);
+
+    const refreshUrlFor = useCallback(async (id) => {
+        const token = localStorage.getItem('token');
+        const { data } = await axiosInstance.get(`/api/my-event/media/by-ids?ids=${id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            withCredentials: true,
+        });
+        const fresh = Array.isArray(data) ? data[0] : null;
+        if (!fresh) return;
+        setMediaItems(prev => prev.map(it => it.id === id ? { ...it, url: fresh.url, thumbUrl: fresh.thumbUrl ?? it.thumbUrl } : it));
+    }, []);
+
+    const etagRef = useRef(null);
+    const pollStopRef = useRef(null);
+    const esRef = useRef(null);
+    const visibleRef = useRef(document.visibilityState === 'visible');
 
     useEffect(() => {
-        fetchEvent().then(r => {});
-        fetchMedia().then(r => {});
-        const interval = setInterval(fetchMedia, 30000);
-        return () => clearInterval(interval);
+        const onVis = () => { visibleRef.current = document.visibilityState === 'visible'; };
+        document.addEventListener('visibilitychange', onVis);
+        return () => document.removeEventListener('visibilitychange', onVis);
+    }, []);
+
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    const mergePreservingUrls = (incoming, prev) => {
+        const prevById = new Map(prev.map(i => [i.id, i]));
+        const merged = incoming.map(it => {
+            const old = prevById.get(it.id);
+            if (!old) return it;
+            return { ...it, url: old.url ?? it.url, thumbUrl: old.thumbUrl ?? it.thumbUrl };
+        });
+        const incomingIds = new Set(incoming.map(i => i.id));
+        const extras = prev.filter(p => !incomingIds.has(p.id));
+        const all = [...extras, ...merged].sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
+        return all;
+    };
+
+    const isPollingRef = useRef(false);
+
+    const startSmartPolling = useCallback(() => {
+        if (isPollingRef.current) return () => {}; // уже идёт
+        isPollingRef.current = true;
+
+        let stopped = false;
+        let delay = 5000;
+
+        (async () => {
+            while (!stopped) {
+                if (!visibleRef.current) { await sleep(10000); continue; }
+                try {
+                    const token = localStorage.getItem('token');
+                    const hdrs = { Authorization: `Bearer ${token}` };
+                    if (etagRef.current) hdrs['If-None-Match'] = etagRef.current;
+
+                    const res = await axiosInstance.get('/api/my-event/media', {
+                        headers: hdrs,
+                        validateStatus: () => true,
+                        withCredentials: true,
+                    });
+
+                    if (res.status === 200) {
+                        etagRef.current = res.headers?.etag || res.headers?.ETag || etagRef.current;
+                        const fetched = (res.data ?? []).sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
+                        setMediaItems(prev => mergePreservingUrls(fetched, prev));
+                        delay = 5000;
+                    } else if (res.status === 304) {
+                        delay = Math.min(delay * 2, 60000);
+                    } else {
+                        delay = Math.min(delay * 2, 60000);
+                    }
+                } catch {
+                    delay = Math.min(delay * 2, 60000);
+                }
+                await sleep(delay);
+            }
+        })();
+
+        return () => { stopped = true; isPollingRef.current = false; };
+    }, [axiosInstance, setMediaItems]);
+
+    const stopSmartPolling = () => {
+        if (pollStopRef.current) { pollStopRef.current(); pollStopRef.current = null; }
+    };
+
+    // Init loading
+    useEffect(() => {
+        fetchEvent().then(() => {});
+        fetchMedia().then(() => {});
     }, [fetchEvent, fetchMedia]);
+
+    useEffect(() => {
+        if (!eventId) return;
+
+        let cancelled = false;
+
+        const connectSSE = async () => {
+            try {
+                await axiosInstance.get('/api/mercure/authorize', {
+                    withCredentials: true,
+                    headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+                });
+                if (cancelled) return;
+
+                const hub = new URL('/.well-known/mercure', window.location.origin);
+                hub.searchParams.append('topic', `event/${eventId}`);
+
+                esRef.current?.close();
+
+                const es = new EventSource(hub.toString(), { withCredentials: true });
+                esRef.current = es;
+
+                es.onopen = () => {
+                    console.debug('[SSE] onopen');
+                    stopSmartPolling();
+                };
+
+                es.onmessage = (e) => {
+                    console.debug('[SSE] onmessage');
+                    try {
+                        const msg = JSON.parse(e.data);
+                        if (msg?.type === 'media_added' && Array.isArray(msg.ids) && msg.ids.length) {
+                            const token = localStorage.getItem('token');
+                            const idsParam = msg.ids.join(',');
+                            axiosInstance.get(`/api/my-event/media/by-ids?ids=${idsParam}`, {
+                                headers: { Authorization: `Bearer ${token}` },
+                                withCredentials: true,
+                            }).then(({ data }) => {
+                                setMediaItems(prev => {
+                                    const known = new Set(prev.map(i => i.id));
+                                    const fresh = (data || []).filter(i => !known.has(i.id));
+                                    if (!fresh.length) return prev;
+                                    const merged = [...fresh, ...prev].sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
+                                    return merged;
+                                });
+                            }).catch(() => {
+                                console.warn('by-ids failed');
+                            });
+                        }
+                    } catch {
+
+                    }
+                };
+
+                es.onerror = () => {
+                    console.debug('[SSE] onerror');
+                    console.warn('Mercure/SSE error — switching to smart polling');
+
+                    if (!pollStopRef.current) {
+                        pollStopRef.current = startSmartPolling();
+                    }
+                };
+            } catch (err) {
+                console.warn('Mercure authorize failed:', err);
+            }
+        };
+
+        console.debug('[SSE] connect');
+        connectSSE();
+
+        return () => {
+            cancelled = true;
+            esRef.current?.close();
+            esRef.current = null;
+            // при уходе со страницы тоже остановим поллинг
+            stopSmartPolling();
+        };
+    }, [eventId, startSmartPolling]);
+
 
     useEffect(() => {
         const uploaded = location.state?.uploaded;
@@ -122,7 +304,7 @@ export default function MediaGallery({ externalUpload }) {
 
             try {
                 const { data: downloadLinks } = await axiosInstance.post(
-                    `${API_URL}/api/my-event/media/download-links`,
+                    `/api/my-event/media/download-links`,
                     ids,
                     { headers: { Authorization: `Bearer ${token}` } }
                 );
@@ -278,6 +460,7 @@ export default function MediaGallery({ externalUpload }) {
                                 index={index}
                                 onClick={handleOpen}
                                 view={view}
+                                onUrlExpired={() => refreshUrlFor(item.id)}
                             />
                         ))}
                     </AnimatePresence>

@@ -8,7 +8,13 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
-        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024 // 10 MB erlauben
+        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024, // 10 MB erlauben
+        runtimeCaching: [
+          {
+            urlPattern: /^\/\.well-known\/mercure/,
+            handler: 'NetworkOnly',
+          },
+        ],
       },
       manifest: {
         name: 'WedReel',
@@ -35,6 +41,23 @@ export default defineConfig({
   server: {
     host: 'localhost',
     port: 3000,
-    strictPort: true
+    strictPort: true,
+    proxy: {
+      '^/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/.well-known/mercure': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+        ws: false,
+      },
+    },
   }
 })

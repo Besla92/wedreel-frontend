@@ -1,8 +1,9 @@
 import { Box } from '@mui/material';
+import { memo } from 'react';
 import { motion } from 'framer-motion';
 import { useInView } from 'react-intersection-observer';
 
-export default function LazyMediaItem({ item, index, onClick, view }) {
+function LazyMediaItem({ item, index, onClick, view, onUrlExpired}) {
     const { ref, inView } = useInView({ triggerOnce: true, threshold: 0.2 });
 
     const isImage = item.type === 'image';
@@ -37,6 +38,9 @@ export default function LazyMediaItem({ item, index, onClick, view }) {
                                 height: '100%',
                                 objectFit: 'cover',
                             }}
+                            onError={(e) => {
+                              onUrlExpired && onUrlExpired(item.id);
+                            }}
                         />
                     ) : (
                         <>
@@ -46,6 +50,9 @@ export default function LazyMediaItem({ item, index, onClick, view }) {
                                 preload="none"
                                 playsInline
                                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                onError={(e) => {
+                                    onUrlExpired && onUrlExpired(item.id);
+                                }}
                             />
                             <Box
                                 sx={{
@@ -73,3 +80,12 @@ export default function LazyMediaItem({ item, index, onClick, view }) {
         </motion.div>
     );
 }
+
+export default memo(LazyMediaItem, (prev, next) => {
+    return (
+        prev.view === next.view &&
+        prev.item.id === next.item.id &&
+        prev.item.url === next.item.url &&
+        prev.item.thumbUrl === next.item.thumbUrl
+    );
+});
