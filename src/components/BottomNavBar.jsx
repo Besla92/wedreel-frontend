@@ -58,14 +58,20 @@ export default function BottomNavBar({ onUpload }) {
     }
 
     const handleUpload = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
 
         try {
             setUploading(true);
-            const uploaded = await uploadToS3(file); // fetch ohne onProgress
-
-            await waitForImage(uploaded.url);
+            
+            // Upload files sequentially to avoid overwhelming the server
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                // Skip rate limit for multiple uploads (except for the first one)
+                const uploaded = await uploadToS3(file, undefined, i > 0);
+                await waitForImage(uploaded.url);
+            }
+            
             onUpload?.('refresh');
             if (location.pathname !== '/media') navigate('/media');
         } catch (err) {
@@ -95,6 +101,7 @@ export default function BottomNavBar({ onUpload }) {
                 type="file"
                 accept="image/*,video/*"
                 capture="environment"
+                multiple
                 onChange={handleUpload}
                 style={{ display: 'none' }}
             />

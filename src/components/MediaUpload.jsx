@@ -13,7 +13,7 @@ const ALLOWED_TYPES = [
 
 let lastUpload = 0;
 
-export async function uploadToS3(file, onProgress) {
+export async function uploadToS3(file, onProgress, skipRateLimit = false) {
     const token = localStorage.getItem('token');
     if (!token) throw new Error('Nicht authentifiziert');
 
@@ -26,7 +26,7 @@ export async function uploadToS3(file, onProgress) {
     }
 
     const now = Date.now();
-    if (now - lastUpload < 3000) {
+    if (!skipRateLimit && now - lastUpload < 3000) {
         throw new Error('Zu viele Uploads in kurzer Zeit');
     }
     lastUpload = now;
